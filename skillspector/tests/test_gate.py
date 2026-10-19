@@ -142,6 +142,29 @@ class Fixtures(unittest.TestCase):
         self.assertIn("4 suppressed", proc.stdout)
         self.assertIn("no-such-skill", proc.stderr)
 
+    def test_included_directories_are_scanned_once(self):
+        alone = self.gate("included")
+        self.assertEqual(alone.returncode, 1, alone.stdout + alone.stderr)
+        self.assertIn("scanned 1 skill(s),", alone.stdout)
+        self.assertNotIn("agents/helper.md", alone.stdout)
+
+        # .claude holds the skill already scanned on its own: no duplicates.
+        claude = self.gate("included", "--include", ".claude")
+        self.assertIn("1 skill(s) and 1 included directory", claude.stdout)
+        self.assertEqual(self.active(alone), self.active(claude))
+
+        agents = self.gate("included", "--include", "agents", "--include", ".claude")
+        self.assertIn("1 skill(s) and 2 included directories", agents.stdout)
+        self.assertIn("agents/helper.md", agents.stdout)
+
+    def test_missing_include_is_an_error(self):
+        proc = self.gate("included", "--include", "nope")
+        self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
+
+    @staticmethod
+    def active(proc):
+        return int(proc.stdout.split(" active finding")[0].rsplit(" ", 1)[-1])
+
     def test_unchanged_skills_are_not_scanned(self):
         with tempfile.NamedTemporaryFile("w", suffix=".txt") as changed:
             changed.write("README.md\n")

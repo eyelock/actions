@@ -59,6 +59,7 @@ class Finding:
 class SkillResult:
     skill: str
     findings: list[Finding] = field(default_factory=list)
+    included: bool = False
 
     @property
     def active(self) -> list[Finding]:
@@ -80,8 +81,8 @@ def discover_skills(root: Path, excludes: list[str]) -> list[str]:
 
 
 def select_changed(skills: list[str], changed: list[str], baseline: str | None) -> list[str]:
-    """Skills containing a changed file. All of them if the baseline changed,
-    since dropping a rule can surface findings in any skill."""
+    """Scan targets containing a changed file. All of them if the baseline
+    changed, since dropping a rule can surface findings in any skill."""
     changed = [c.strip().removeprefix("./") for c in changed if c.strip()]
     if baseline and baseline in changed:
         return skills
@@ -200,18 +201,38 @@ def read_sarif(sarif: Path, skill: str, display_root: str) -> tuple[list[Finding
     return findings, doc
 
 
+def finding_key(f: Finding) -> tuple:
+    return (f.rule, f.path, f.line, f.matched)
+
+
+def sarif_key(res: dict) -> tuple:
+    loc = (res.get("locations") or [{}])[0].get("physicalLocation", {})
+    return (
+        res.get("ruleId"),
+        loc.get("artifactLocation", {}).get("uri"),
+        loc.get("region", {}).get("startLine"),
+        " ".join(str(res.get("properties", {}).get("finding", "")).split()),
+    )
+
+
 def merge_sarif(docs: list[dict]) -> dict:
     """One run for the whole tree. Code scanning rejects several runs from the
-    same tool in one upload."""
+    same tool in one upload. A file inside both a skill and an included
+    directory is reported once."""
     rules: dict[str, dict] = {}
     results = []
+    seen: set[tuple] = set()
     driver = {}
     for doc in docs:
         for run in doc.get("runs", []):
             driver = driver or {k: v for k, v in run.get("tool", {}).get("driver", {}).items() if k != "rules"}
             for rule in run.get("tool", {}).get("driver", {}).get("rules", []):
                 rules.setdefault(rule["id"], rule)
-            results.extend(run.get("results", []))
+            for res in run.get("results", []):
+                key = sarif_key(res)
+                if key not in seen:
+                    seen.add(key)
+                    results.append(res)
     driver["rules"] = list(rules.values())
     return {
         "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
@@ -235,7 +256,7 @@ def report(results: list[SkillResult], stale: list[dict], annotate: bool) -> str
         if annotate:
             props = f"file={f.path}" + (f",line={f.line}" if f.line else "") + f",title=SkillSpector {f.rule}"
             print(f"::{ANNOTATION.get(f.level, 'warning')} {props}::{escape_annotation(f.message + detail)}")
-    print(f"SkillSpector: scanned {len(results)} skill(s), {len(active)} active finding(s), {suppressed} suppressed.")
+    print(f"SkillSpector: scanned {scanned(results)}, {len(active)} active finding(s), {suppressed} suppressed.")
     if lines:
         print()
         print("\n".join(lines))
@@ -246,13 +267,20 @@ def report(results: list[SkillResult], stale: list[dict], annotate: bool) -> str
     return summary_markdown(results, active, suppressed, stale)
 
 
+def scanned(results: list[SkillResult]) -> str:
+    skills = sum(1 for r in results if not r.included)
+    included = len(results) - skills
+    text = f"{skills} skill(s)"
+    return text + (f" and {included} included director{'y' if included == 1 else 'ies'}" if included else "")
+
+
 def summary_markdown(results, active, suppressed, stale) -> str:
     out = ["## SkillSpector", ""]
     if not results:
         out.append("No skills to scan.")
         return "\n".join(out) + "\n"
     verdict = "✅ No active findings" if not active else f"❌ {len(active)} active finding(s)"
-    out += [f"{verdict} in {len(results)} skill(s), {suppressed} suppressed by the baseline.", ""]
+    out += [f"{verdict} in {scanned(results)}, {suppressed} suppressed by the baseline.", ""]
     if active:
         out += ["| Severity | Rule | Location | Finding |", "|---|---|---|---|"]
         for f in sorted(active, key=lambda f: (LEVEL_ORDER.get(f.level, 9), f.path, f.line or 0)):
@@ -282,6 +310,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     p.add_argument(
         "--exclude", action="append", default=[], help="glob of skill directories to skip, relative to ROOT; repeatable"
     )
+    p.add_argument(
+        "--include",
+        action="append",
+        default=[],
+        help="directory without a SKILL.md to scan as one unit (agents, rules, commands), relative to ROOT; repeatable",
+    )
     p.add_argument("--sarif", help="write one merged SARIF file here, paths relative to the working directory")
     p.add_argument("--summary", help="write a Markdown summary here")
     p.add_argument("--skillspector", default="skillspector", help="skillspector executable")
@@ -300,6 +334,14 @@ def run(args: argparse.Namespace) -> int:
     baseline_rel = os.path.relpath(baseline_path, root) if baseline_path.is_file() else None
 
     skills = discover_skills(root, args.exclude)
+    included = []
+    for d in args.include:
+        rel = Path(os.path.normpath(d.strip())).as_posix()
+        if not (root / rel).is_dir():
+            raise GateError(f"--include {d}: no such directory under {root}")
+        if rel not in skills and rel not in included:
+            included.append(rel)
+    skills = skills + included
     full_scan = True
     if args.changed_files:
         changed = Path(args.changed_files).read_text(encoding="utf-8").splitlines()
@@ -310,6 +352,7 @@ def run(args: argparse.Namespace) -> int:
     results: list[SkillResult] = []
     docs = []
     used: set[int] = set()
+    seen: set[tuple] = set()
     with tempfile.TemporaryDirectory(prefix="skillspector-gate-") as tmp:
         for n, skill in enumerate(skills):
             translated = rules_for_skill(rules, skill, skill_files(root, skill))
@@ -322,8 +365,11 @@ def run(args: argparse.Namespace) -> int:
             print(f"==> {skill}", file=sys.stderr)
             scan(args.skillspector, root, skill, skill_baseline, sarif)
             findings, doc = read_sarif(sarif, skill, args.root)
+            # A file inside both a skill and an included directory is scanned twice.
+            findings = [f for f in findings if finding_key(f) not in seen]
+            seen.update(finding_key(f) for f in findings)
             docs.append(doc)
-            results.append(SkillResult(skill, findings))
+            results.append(SkillResult(skill, findings, included=skill in included))
             reasons = {f.suppressed_by for f in findings if f.suppressed_by}
             used.update(i for i, rule in translated if str(rule.get("reason")) in reasons)
 

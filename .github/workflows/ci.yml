@@ -72,12 +72,25 @@ jobs:
           changed-only: "false"
           image: skillspector-gate:ci
 
+      - name: Action scans included directories
+        id: included
+        uses: ./skillspector
+        with:
+          path: skillspector/tests/fixtures/included
+          include: |
+            agents
+            .claude
+          changed-only: "false"
+          fail-on-findings: "false"
+          image: skillspector-gate:ci
+
       - name: Check the action's verdicts
         env:
           CLEAN: ${{ steps.clean.outputs.result }}
           RISKY: ${{ steps.risky.outputs.result }}
           BASELINED: ${{ steps.baselined.outputs.result }}
           SARIF: ${{ steps.risky.outputs.sarif }}
+          INCLUDED_SARIF: ${{ steps.included.outputs.sarif }}
         run: |
           test "$CLEAN" = pass
           test "$RISKY" = fail
@@ -85,6 +98,8 @@ jobs:
           jq -e '.runs | length == 1' "$SARIF"
           jq -e '[.runs[0].results[].locations[0].physicalLocation.artifactLocation.uri]
                  | all(startswith("skillspector/tests/fixtures/risky/skills/"))' "$SARIF"
+          jq -e '[.runs[0].results[].locations[0].physicalLocation.artifactLocation.uri]
+                 | (any(endswith("/agents/helper.md")) and (map(select(endswith("setup-tool/SKILL.md"))) | length == 4))' "$INCLUDED_SARIF"
 
   changesets:
     name: Changeset
