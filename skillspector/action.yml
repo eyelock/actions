@@ -67,6 +67,9 @@ runs:
           docker build --quiet --tag "$image" "$GITHUB_ACTION_PATH" >/dev/null
         fi
         echo "image=$image" >> "$GITHUB_OUTPUT"
+        # Its own directory per call, so a workflow using the action twice
+        # does not overwrite the first call's reports.
+        echo "dir=$(mktemp -d "$RUNNER_TEMP/skillspector.XXXXXX")" >> "$GITHUB_OUTPUT"
 
     - name: List changed files
       id: changed
@@ -75,9 +78,8 @@ runs:
       env:
         BASE_SHA: ${{ github.event.pull_request.base.sha }}
         INPUT_PATH: ${{ inputs.path }}
+        OUT: ${{ steps.image.outputs.dir }}
       run: |
-        out="$RUNNER_TEMP/skillspector"
-        mkdir -p "$out"
         git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA"
         prefix="${INPUT_PATH#./}"
         prefix="${prefix%/}"
@@ -88,7 +90,7 @@ runs:
           elif [[ "$file" == "$prefix/"* ]]; then
             echo "${file#"$prefix/"}"
           fi
-        done > "$out/changed.txt"
+        done > "$OUT/changed.txt"
         echo "file=changed.txt" >> "$GITHUB_OUTPUT"
 
     - name: Scan
@@ -100,9 +102,8 @@ runs:
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_EXCLUDE: ${{ inputs.exclude }}
         CHANGED_FILE: ${{ steps.changed.outputs.file }}
+        OUT: ${{ steps.image.outputs.dir }}
       run: |
-        out="$RUNNER_TEMP/skillspector"
-        mkdir -p "$out"
         args=(gate "$INPUT_PATH" --sarif /out/skillspector.sarif --summary /out/summary.md)
         if [[ -n "$INPUT_BASELINE" ]]; then args+=(--baseline "$INPUT_BASELINE"); fi
         if [[ -n "$CHANGED_FILE" ]]; then args+=(--changed-files "/out/$CHANGED_FILE"); fi
@@ -115,11 +116,11 @@ runs:
           --user "$(id -u):$(id -g)" \
           --env GITHUB_ACTIONS \
           --volume "$GITHUB_WORKSPACE:/scan:ro" \
-          --volume "$out:/out" \
+          --volume "$OUT:/out" \
           "$IMAGE" "${args[@]}" || status=$?
 
-        if [[ -f "$out/summary.md" ]]; then cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"; fi
-        if [[ -f "$out/skillspector.sarif" ]]; then echo "sarif=$out/skillspector.sarif" >> "$GITHUB_OUTPUT"; fi
+        if [[ -f "$OUT/summary.md" ]]; then cat "$OUT/summary.md" >> "$GITHUB_STEP_SUMMARY"; fi
+        if [[ -f "$OUT/skillspector.sarif" ]]; then echo "sarif=$OUT/skillspector.sarif" >> "$GITHUB_OUTPUT"; fi
         case "$status" in
           0) echo "result=pass" >> "$GITHUB_OUTPUT" ;;
           1) echo "result=fail" >> "$GITHUB_OUTPUT" ;;
