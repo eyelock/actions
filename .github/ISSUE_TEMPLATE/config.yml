@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Discussions
+    url: https://github.com/eyelock/actions/discussions
+    about: Ask questions and discuss ideas
+  - name: Report a vulnerability
+    url: https://github.com/eyelock/actions/security/advisories/new
+    about: Report security issues privately, not as a public issue

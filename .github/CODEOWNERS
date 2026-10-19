@@ -1,0 +1,9 @@
+# Default owners for everything in the repo
+* @eyelock
+
+# Actions
+/skillspector/ @eyelock
+
+# Build, CI and release
+/scripts/ @eyelock
+/.github/workflows/ @eyelock

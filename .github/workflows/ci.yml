@@ -106,3 +106,26 @@ jobs:
 
       - name: Changeset status
         run: pnpm exec changeset status --since="origin/${GITHUB_BASE_REF}"
+
+  # The one check the rulesets require. It runs even when a job it needs
+  # failed, and fails itself: GitHub counts a skipped required check as
+  # passing, so without always() a red PR could merge. A skipped job (the
+  # changeset check on pushes) is fine.
+  all-clear:
+    name: All Clear
+    needs: [lint, skillspector, changesets]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "results: $RESULTS"
+          for result in $RESULTS; do
+            case "$result" in
+              success|skipped) ;;
+              *) echo "One or more checks did not pass"; exit 1 ;;
+            esac
+          done
+          echo "All checks passed"
