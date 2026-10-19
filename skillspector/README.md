@@ -4,7 +4,10 @@ Scan agent skills with [NVIDIA SkillSpector](https://github.com/NVIDIA/SkillSpec
 any finding the baseline does not suppress.
 
 A skill is any directory holding a `SKILL.md`. Each one is scanned on its own, statically
-(`--no-llm`): no API key, no cost, and the same tree always gives the same result.
+(`--no-llm`): no API key, no cost, and the same tree always gives the same result. Other
+harness artifacts (agent definitions, rules, commands, plugin manifests that declare hooks) are
+scanned when you name their directories in `include`. A file in both an included directory and
+a skill is reported once.
 
 ## Why not just run `skillspector scan`
 
@@ -46,6 +49,7 @@ baseline scans them all, since removing a rule can surface a finding anywhere.
 | `path` | `.` | Directory to search for skills. |
 | `baseline` | `<path>/.skillspector-baseline.yaml` if present | Repository-wide baseline. |
 | `exclude` | | Globs of skill directories to skip, relative to `path`, one per line. |
+| `include` | | Directories without a `SKILL.md` to scan as one unit each, one per line: `agents`, `rules`, `commands`, `.claude`. |
 | `changed-only` | `true` | On pull requests, scan only the skills that changed. |
 | `fail-on-findings` | `true` | `false` reports without failing, for introducing the scan. |
 | `upload-sarif` | `false` | Upload to code scanning; needs `security-events: write`. |

@@ -20,6 +20,12 @@ inputs:
     description: Globs of skill directories to skip, relative to `path`, one per line.
     required: false
     default: ""
+  include:
+    description: >-
+      Directories without a SKILL.md to scan as one unit each, relative to `path`, one per line:
+      agents, rules, commands, or a harness directory such as `.claude`.
+    required: false
+    default: ""
   changed-only:
     description: On pull requests, scan only the skills the pull request changes. A change to the baseline scans every skill.
     required: false
@@ -101,6 +107,7 @@ runs:
         INPUT_PATH: ${{ inputs.path }}
         INPUT_BASELINE: ${{ inputs.baseline }}
         INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_INCLUDE: ${{ inputs.include }}
         CHANGED_FILE: ${{ steps.changed.outputs.file }}
         OUT: ${{ steps.image.outputs.dir }}
       run: |
@@ -110,6 +117,9 @@ runs:
         while IFS= read -r glob; do
           if [[ -n "$glob" ]]; then args+=(--exclude "$glob"); fi
         done <<< "$INPUT_EXCLUDE"
+        while IFS= read -r dir; do
+          if [[ -n "$dir" ]]; then args+=(--include "$dir"); fi
+        done <<< "$INPUT_INCLUDE"
 
         status=0
         docker run --rm \
