@@ -1,0 +1,141 @@
+name: SkillSpector
+author: eyelock
+description: Scan agent skills with NVIDIA SkillSpector and fail on any finding the baseline does not suppress.
+branding:
+  icon: shield
+  color: green
+
+inputs:
+  path:
+    description: Directory to search for skills (any directory holding a SKILL.md), relative to the workspace.
+    required: false
+    default: "."
+  baseline:
+    description: >-
+      Repository-wide baseline of accepted findings, relative to the workspace. Rule paths are
+      relative to `path`. Defaults to `<path>/.skillspector-baseline.yaml` when that file exists.
+    required: false
+    default: ""
+  exclude:
+    description: Globs of skill directories to skip, relative to `path`, one per line.
+    required: false
+    default: ""
+  changed-only:
+    description: On pull requests, scan only the skills the pull request changes. A change to the baseline scans every skill.
+    required: false
+    default: "true"
+  fail-on-findings:
+    description: Fail the step when there are active findings. Set to false to report only.
+    required: false
+    default: "true"
+  upload-sarif:
+    description: Upload the SARIF to GitHub code scanning. Needs `security-events write` permission.
+    required: false
+    default: "false"
+  image:
+    description: >-
+      Scanner image to run. By default a release tag pulls its published image, and any other
+      ref builds the image from the action's own Dockerfile.
+    required: false
+    default: ""
+
+outputs:
+  result:
+    description: "`pass` or `fail`."
+    value: ${{ steps.scan.outputs.result }}
+  sarif:
+    description: Path to the merged SARIF report.
+    value: ${{ steps.scan.outputs.sarif }}
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve scanner image
+      id: image
+      shell: bash
+      env:
+        INPUT_IMAGE: ${{ inputs.image }}
+        ACTION_REF: ${{ github.action_ref }}
+      run: |
+        if [[ -n "$INPUT_IMAGE" ]]; then
+          image="$INPUT_IMAGE"
+        elif [[ "$ACTION_REF" =~ ^skillspector-v([0-9]+(\.[0-9]+\.[0-9]+)?)$ ]]; then
+          image="ghcr.io/eyelock/skillspector:${BASH_REMATCH[1]}"
+        else
+          # A commit SHA, a branch or a local checkout: build what that ref contains.
+          image="skillspector-gate:local"
+          docker build --quiet --tag "$image" "$GITHUB_ACTION_PATH" >/dev/null
+        fi
+        echo "image=$image" >> "$GITHUB_OUTPUT"
+
+    - name: List changed files
+      id: changed
+      if: inputs.changed-only == 'true' && github.event_name == 'pull_request'
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        INPUT_PATH: ${{ inputs.path }}
+      run: |
+        out="$RUNNER_TEMP/skillspector"
+        mkdir -p "$out"
+        git fetch --quiet --no-tags --depth=1 origin "$BASE_SHA"
+        prefix="${INPUT_PATH#./}"
+        prefix="${prefix%/}"
+        # The gate wants paths relative to `path`.
+        git diff --name-only "$BASE_SHA" HEAD | while IFS= read -r file; do
+          if [[ -z "$prefix" || "$prefix" == "." ]]; then
+            echo "$file"
+          elif [[ "$file" == "$prefix/"* ]]; then
+            echo "${file#"$prefix/"}"
+          fi
+        done > "$out/changed.txt"
+        echo "file=changed.txt" >> "$GITHUB_OUTPUT"
+
+    - name: Scan
+      id: scan
+      shell: bash
+      env:
+        IMAGE: ${{ steps.image.outputs.image }}
+        INPUT_PATH: ${{ inputs.path }}
+        INPUT_BASELINE: ${{ inputs.baseline }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        CHANGED_FILE: ${{ steps.changed.outputs.file }}
+      run: |
+        out="$RUNNER_TEMP/skillspector"
+        mkdir -p "$out"
+        args=(gate "$INPUT_PATH" --sarif /out/skillspector.sarif --summary /out/summary.md)
+        if [[ -n "$INPUT_BASELINE" ]]; then args+=(--baseline "$INPUT_BASELINE"); fi
+        if [[ -n "$CHANGED_FILE" ]]; then args+=(--changed-files "/out/$CHANGED_FILE"); fi
+        while IFS= read -r glob; do
+          if [[ -n "$glob" ]]; then args+=(--exclude "$glob"); fi
+        done <<< "$INPUT_EXCLUDE"
+
+        status=0
+        docker run --rm \
+          --user "$(id -u):$(id -g)" \
+          --env GITHUB_ACTIONS \
+          --volume "$GITHUB_WORKSPACE:/scan:ro" \
+          --volume "$out:/out" \
+          "$IMAGE" "${args[@]}" || status=$?
+
+        if [[ -f "$out/summary.md" ]]; then cat "$out/summary.md" >> "$GITHUB_STEP_SUMMARY"; fi
+        if [[ -f "$out/skillspector.sarif" ]]; then echo "sarif=$out/skillspector.sarif" >> "$GITHUB_OUTPUT"; fi
+        case "$status" in
+          0) echo "result=pass" >> "$GITHUB_OUTPUT" ;;
+          1) echo "result=fail" >> "$GITHUB_OUTPUT" ;;
+          *) echo "::error title=SkillSpector::The scan did not complete (exit $status)"; exit "$status" ;;
+        esac
+
+    - name: Upload SARIF
+      if: always() && inputs.upload-sarif == 'true' && steps.scan.outputs.sarif != ''
+      uses: github/codeql-action/upload-sarif@6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee # v4.39.0
+      with:
+        sarif_file: ${{ steps.scan.outputs.sarif }}
+        category: skillspector
+
+    - name: Verdict
+      if: steps.scan.outputs.result == 'fail' && inputs.fail-on-findings == 'true'
+      shell: bash
+      run: |
+        echo "::error title=SkillSpector::Active findings. Fix them, or accept each with a path-scoped rule and a reason in the baseline."
+        exit 1

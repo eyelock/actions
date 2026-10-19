@@ -1,0 +1,16 @@
+{
+  "name": "eyelock-actions",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Reusable GitHub Actions, each versioned and released on its own.",
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "changeset": "changeset",
+    "changeset:version": "changeset version",
+    "release:plan": "node scripts/release-plan.mjs"
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.6.0",
+    "@changesets/cli": "^2.27.9"
+  }
+}

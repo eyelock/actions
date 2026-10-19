@@ -1,0 +1,66 @@
+name: SkillSpector upstream
+
+# NVIDIA releases SkillSpector often. When a release is newer than the pinned
+# one, open a pull request that bumps the pin and adds a minor changeset: new
+# rules can fail builds that passed before, so a person reviews the new
+# findings before the action ships it.
+#
+# A pull request opened with GITHUB_TOKEN does not trigger CI. Set the
+# UPSTREAM_PR_TOKEN secret (a fine-grained token with contents and pull
+# requests write) to have CI run on it, or close and reopen the pull request.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: develop
+          token: ${{ secrets.UPSTREAM_PR_TOKEN || github.token }}
+
+      - name: Bump the pin if upstream has a newer release
+        env:
+          GH_TOKEN: ${{ secrets.UPSTREAM_PR_TOKEN || github.token }}
+        run: |
+          dockerfile=skillspector/Dockerfile
+          current="$(sed -n 's/^ARG SKILLSPECTOR_VERSION=//p' "$dockerfile" | head -1)"
+          latest="$(gh api repos/NVIDIA/SkillSpector/releases/latest --jq .tag_name)"
+          echo "pinned $current, upstream $latest"
+          if [[ "$current" == "$latest" ]]; then
+            exit 0
+          fi
+
+          branch="chore/skillspector-$latest"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            echo "$branch already exists"
+            exit 0
+          fi
+
+          commit="$(gh api "repos/NVIDIA/SkillSpector/commits/$latest" --jq .sha)"
+          sed -i \
+            -e "s/^ARG SKILLSPECTOR_VERSION=.*/ARG SKILLSPECTOR_VERSION=$latest/" \
+            -e "s/^ARG SKILLSPECTOR_COMMIT=.*/ARG SKILLSPECTOR_COMMIT=$commit/" \
+            "$dockerfile"
+          printf -- '---\n"skillspector": minor\n---\n\nSkillSpector %s (was %s). New rules can report findings that %s did not.\n' \
+            "$latest" "$current" "$current" > ".changeset/skillspector-$latest.md"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "$dockerfile" .changeset
+          git commit -m "chore(skillspector): bump SkillSpector to $latest"
+          git push origin "$branch"
+          gh pr create --base develop --head "$branch" \
+            --title "chore(skillspector): bump SkillSpector to $latest" \
+            --body "Upstream release: https://github.com/NVIDIA/SkillSpector/releases/tag/$latest
+
+          Pinned to commit \`$commit\`. Before merging, run the new image over the repositories that use this action and triage any new findings."

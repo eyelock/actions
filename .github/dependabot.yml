@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/skillspector"]
+    target-branch: develop
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # The Python base image digest. SkillSpector itself is bumped by
+  # .github/workflows/skillspector-upstream.yml.
+  - package-ecosystem: docker
+    directory: /skillspector
+    target-branch: develop
+    schedule:
+      interval: weekly

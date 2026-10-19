@@ -1,0 +1,108 @@
+name: CI
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: actionlint
+        uses: reviewdog/action-actionlint@419a49378266e892f40c773b4f2fc6de9aa87499 # v1.80.4
+
+      - name: shellcheck
+        uses: ludeeus/action-shellcheck@00cae500b08a931fb5698e11e79bfbd38e612a38 # 2.0.0
+        with:
+          severity: style
+
+      - name: Release plan parses
+        run: node scripts/release-plan.mjs
+
+  skillspector:
+    name: skillspector
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build image
+        run: docker build --tag skillspector-gate:ci skillspector
+
+      - name: Unit and fixture tests, inside the image
+        run: |
+          docker run --rm --volume "$PWD/skillspector:/src:ro" --entrypoint python \
+            skillspector-gate:ci -m unittest discover -s /src/tests -v
+
+      # The action itself, against the fixtures. changed-only is off so that a
+      # pull request which leaves the fixtures alone still scans them.
+      - name: Action passes a clean skill
+        id: clean
+        uses: ./skillspector
+        with:
+          path: skillspector/tests/fixtures/clean
+          changed-only: "false"
+          image: skillspector-gate:ci
+
+      - name: Action reports a risky skill
+        id: risky
+        uses: ./skillspector
+        with:
+          path: skillspector/tests/fixtures/risky
+          changed-only: "false"
+          fail-on-findings: "false"
+          image: skillspector-gate:ci
+
+      - name: Action honours a repository-wide baseline
+        id: baselined
+        uses: ./skillspector
+        with:
+          path: skillspector/tests/fixtures/baselined
+          changed-only: "false"
+          image: skillspector-gate:ci
+
+      - name: Check the action's verdicts
+        env:
+          CLEAN: ${{ steps.clean.outputs.result }}
+          RISKY: ${{ steps.risky.outputs.result }}
+          BASELINED: ${{ steps.baselined.outputs.result }}
+          SARIF: ${{ steps.risky.outputs.sarif }}
+        run: |
+          test "$CLEAN" = pass
+          test "$RISKY" = fail
+          test "$BASELINED" = pass
+          jq -e '.runs | length == 1' "$SARIF"
+          jq -e '[.runs[0].results[].locations[0].physicalLocation.artifactLocation.uri]
+                 | all(startswith("skillspector/tests/fixtures/risky/skills/"))' "$SARIF"
+
+  changesets:
+    name: Changeset
+    if: github.event_name == 'pull_request' && !startsWith(github.head_ref, 'changeset-release/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "22"
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Changeset status
+        run: pnpm exec changeset status --since="origin/${GITHUB_BASE_REF}"

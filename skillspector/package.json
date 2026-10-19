@@ -1,0 +1,6 @@
+{
+  "name": "skillspector",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Scan agent skills with NVIDIA SkillSpector and fail on any finding the baseline does not suppress."
+}

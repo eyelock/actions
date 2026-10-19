@@ -1,0 +1,18 @@
+# Fixture: every finding in skills/setup-tool is accepted with repository-relative
+# paths, the way a real repository writes its baseline.
+version: 2
+rules:
+  - id: "P1"
+    path: "skills/setup-tool/SKILL.md"
+    reason: "Fixture: exact repository path"
+  - id: "SC2"
+    path: "*/setup-tool/*"
+    reason: "Fixture: glob across directories"
+  - id: "TM2"
+    path: "skills/*/SKILL.md"
+    reason: "Fixture: glob over skill names"
+  - id: "EA2"
+    reason: "Fixture: no path, applies everywhere"
+  - id: "P1"
+    path: "skills/no-such-skill/SKILL.md"
+    reason: "Fixture: stale, matches nothing"
