@@ -20,3 +20,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps"
+    # Patch releases and digests only. A new Python minor needs wheels for
+    # SkillSpector's native dependencies (yara-python had none for 3.14), so
+    # move it by hand once they exist.
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
