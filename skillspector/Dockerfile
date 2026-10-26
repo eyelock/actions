@@ -3,7 +3,7 @@
 # Pinned twice: the tag names the release a person reviewed, and the commit
 # is what is installed, so a moved tag upstream cannot change what gates a
 # merge. Bump both together (the upstream workflow does this).
-FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258 AS builder
+FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70 AS builder
 ARG SKILLSPECTOR_VERSION=v2.13.0
 ARG SKILLSPECTOR_COMMIT=091a509b3d6ba8ff5be528966e1f43c2e68cf214
 RUN apt-get update \
@@ -13,7 +13,7 @@ RUN python -m venv /opt/skillspector \
     && /opt/skillspector/bin/pip install --no-cache-dir \
        "skillspector @ git+https://github.com/NVIDIA/SkillSpector.git@${SKILLSPECTOR_COMMIT}"
 
-FROM python:3.12-slim-bookworm@sha256:34386ef0cb081344d7ec1c103ba398e6e9f64e9ab3a1509accc92a4e24a07258
+FROM python:3.12-slim-bookworm@sha256:6a0e06f5ba0b373d051aabd3fffb9b873f27f9a2a3a14bcbe37dee6f0e3bbc70
 ARG SKILLSPECTOR_VERSION=v2.13.0
 ARG SKILLSPECTOR_COMMIT=091a509b3d6ba8ff5be528966e1f43c2e68cf214
 LABEL org.opencontainers.image.source="https://github.com/eyelock/actions" \
