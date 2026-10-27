@@ -40,25 +40,30 @@ jobs:
           fi
 
           branch="chore/skillspector-$latest"
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            echo "$branch already exists"
-            exit 0
-          fi
-
           commit="$(gh api "repos/NVIDIA/SkillSpector/commits/$latest" --jq .sha)"
-          sed -i \
-            -e "s/^ARG SKILLSPECTOR_VERSION=.*/ARG SKILLSPECTOR_VERSION=$latest/" \
-            -e "s/^ARG SKILLSPECTOR_COMMIT=.*/ARG SKILLSPECTOR_COMMIT=$commit/" \
-            "$dockerfile"
-          printf -- '---\n"skillspector": minor\n---\n\nSkillSpector %s (was %s). New rules can report findings that %s did not.\n' \
-            "$latest" "$current" "$current" > ".changeset/skillspector-$latest.md"
+          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
+            # A pull request that was opened and closed is a decision; leave it.
+            # A branch with none means an earlier run pushed but could not open one.
+            if [[ "$(gh pr list --head "$branch" --state all --json number --jq length)" != 0 ]]; then
+              echo "$branch already has a pull request"
+              exit 0
+            fi
+            echo "$branch has no pull request, opening one"
+          else
+            sed -i \
+              -e "s/^ARG SKILLSPECTOR_VERSION=.*/ARG SKILLSPECTOR_VERSION=$latest/" \
+              -e "s/^ARG SKILLSPECTOR_COMMIT=.*/ARG SKILLSPECTOR_COMMIT=$commit/" \
+              "$dockerfile"
+            printf -- '---\n"skillspector": minor\n---\n\nSkillSpector %s (was %s). New rules can report findings that %s did not.\n' \
+              "$latest" "$current" "$current" > ".changeset/skillspector-$latest.md"
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git switch -c "$branch"
-          git add "$dockerfile" .changeset
-          git commit -m "chore(skillspector): bump SkillSpector to $latest"
-          git push origin "$branch"
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git switch -c "$branch"
+            git add "$dockerfile" .changeset
+            git commit -m "chore(skillspector): bump SkillSpector to $latest"
+            git push origin "$branch"
+          fi
           gh pr create --base develop --head "$branch" \
             --title "chore(skillspector): bump SkillSpector to $latest" \
             --body "Upstream release: https://github.com/NVIDIA/SkillSpector/releases/tag/$latest
