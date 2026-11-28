@@ -1,0 +1,83 @@
+name: Dependabot changeset
+
+# Every pull request needs a changeset, and Dependabot does not write one.
+# This adds it: a patch for each action whose directory the update touches,
+# or an empty changeset when it only touches repository tooling. The commit
+# is made as the eyelock-actions-bot GitHub App, so CI runs again on it.
+#
+# pull_request_target runs this file as it is on the base branch, with the
+# app's key, so it never checks out or runs the pull request's code: it reads
+# the list of changed files and writes the changeset through the API.
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize]
+    branches: [develop]
+
+permissions:
+  contents: read
+
+jobs:
+  changeset:
+    name: Add a changeset
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bot token
+        id: bot
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ vars.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: read
+
+      - name: Commit a changeset unless there is one
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          REPO: ${{ github.repository }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          files="$(gh api --paginate "repos/$REPO/pulls/$NUMBER/files" --jq '.[].filename')"
+          printf 'changed:\n%s\n' "$files" >&2
+
+          if grep -E '^\.changeset/.+\.md$' <<<"$files" | grep -qv '^\.changeset/README\.md$'; then
+            echo "already has a changeset"
+            exit 0
+          fi
+
+          # An action is a top-level directory with a package.json on the base
+          # branch, named after the directory.
+          actions=()
+          while read -r dir; do
+            name="$(gh api -H "Accept: application/vnd.github.raw+json" \
+              "repos/$REPO/contents/$dir/package.json?ref=$BASE_SHA" 2>/dev/null \
+              | jq -r '.name // empty' 2>/dev/null || true)"
+            if [[ "$name" == "$dir" ]]; then
+              actions+=("$dir")
+            fi
+          done < <(grep / <<<"$files" | cut -d/ -f1 | grep -v '^\.' | sort -u)
+
+          summary="${TITLE//$'\n'/ }"
+          {
+            echo "---"
+            for action in "${actions[@]}"; do
+              echo "\"$action\": patch"
+            done
+            echo "---"
+            if [[ ${#actions[@]} -gt 0 ]]; then
+              printf '\n%s\n' "$summary"
+            fi
+          } > changeset.md
+          cat changeset.md
+
+          gh api --method PUT "repos/$REPO/contents/.changeset/dependabot-$NUMBER.md" \
+            -f message="chore: add changeset for #$NUMBER" \
+            -f content="$(base64 -w0 changeset.md)" \
+            -f branch="$BRANCH" \
+            --jq '.commit.html_url'
